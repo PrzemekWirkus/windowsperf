@@ -39,7 +39,8 @@
 #endif
 
 SpeInfo* spe_info = NULL;
-static __declspec(align(64)) unsigned char SpeMemoryBuffer[SPE_MEMORY_BUFFER_SIZE];
+static __declspec(align(64)) unsigned char* SpeMemoryBufferAllocator = NULL;        // Phisical memory we allocate
+static __declspec(align(64)) unsigned char* SpeMemoryBuffer = NULL;                 // Aligned buffer
 static __declspec(align(64)) unsigned char* SpeMemoryBufferLimit = NULL;
 static unsigned char* lastCopiedPtr = NULL;
 
@@ -69,12 +70,29 @@ VOID SPEWorkItemFunc(WDFWORKITEM WorkItem)
     {
         case PMU_CTL_SPE_START:
         {
-            RtlSecureZeroMemory(SpeMemoryBuffer, sizeof(SpeMemoryBuffer));
-
             START_WORK_ON_CORE(context->core_idx);
             
+            /*
+            * When the Profiling Buffer is first configured, PMBPTR_EL1.PTR must be aligned to PMBIDR_EL1.Align.
+            * That is, if PMBIDR_EL1.Align is nonzero, PMBPTR_EL1.PTR [UInt(PMBIDR_EL1.Align)-1:0] must be all
+            * zeros.
+            */
+            UINT64 align = _ReadStatusReg(PMBIDR_EL1) & PMBIDR_EL1_Align_MASK;
+            // We gonna most probably align this pointer so move it foward by arbitrary size of one page
+            SpeMemoryBuffer = SpeMemoryBufferAllocator + PAGE_SIZE;
+
+            if (align > 0)
+            {
+                UINT64 ptr = (UINT64)SpeMemoryBuffer;
+                ptr &= ~GENMASK_ULL(align - 1, 0);   // PMBPTR_EL1.PTR [UInt(PMBIDR_EL1.Align)-1:0] must be all zeros.
+                SpeMemoryBuffer = (unsigned char*)ptr;
+            }
             _WriteStatusReg(PMBPTR_EL1, (UINT64)SpeMemoryBuffer);
-           
+
+            /* Set limit to SPE fill buffer
+            */
+            SpeMemoryBufferLimit = SpeMemoryBuffer + (10 * PAGE_SIZE);
+
             /*
             * Writing to PMSIRR_EL1 and PMSICR_EL1 seems to be innefective for some reason.
             * When PMSIRR_EL1 is written to its value just goes to 0 and PMSICR_EL1 seems to be unchanged.
@@ -136,29 +154,29 @@ VOID SPEWorkItemFunc(WDFWORKITEM WorkItem)
             * (we zero the register). When user selects flag, e.g. /ts_enable=1/ we enable given setting
             * (e.g. TS bit) to "ON" in this register.
             */
-            _WriteStatusReg(PMSCR_EL1, 0x00);
+            UINT64 pmscr_el1_val = 0 | PMSCR_EL1_E0SPE;
             if (context->config_flags & SPE_CTL_FLAG_TS)
             {
                 // Enable timestamps with ts_enable filter:
-                UINT64 pmscr_el1_val = 0x00 | BIT(5);   // PMSCR_EL1.TS
-                _WriteStatusReg(PMSCR_EL1, pmscr_el1_val);
+                pmscr_el1_val |= BIT(5);   // PMSCR_EL1.TS
                 KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: ts_enable=1 PMSICR_EL1=0x%llX\n", _ReadStatusReg(PMSCR_EL1) & 0b11111011));
             }
+            _WriteStatusReg(PMSCR_EL1, pmscr_el1_val);
 
-            _WriteStatusReg(PMBSR_EL1, _ReadStatusReg(PMBSR_EL1) & (~PMBSR_EL1_S)); // Clear PMBSR_EL1.S
+            //_WriteStatusReg(PMBSR_EL1, _ReadStatusReg(PMBSR_EL1) & (~PMBSR_EL1_S)); // Clear PMBSR_EL1.S
             //PMBPTR_EL1[63:56] must equal PMBLIMITR_EL1.LIMIT[63:56]
             _WriteStatusReg(PMBLIMITR_EL1, (UINT64)SpeMemoryBufferLimit | PMBLIMITR_EL1_E); // Enable PMBLIMITR_ELI1.E
-            _WriteStatusReg(PMSCR_EL1, _ReadStatusReg(PMSCR_EL1) | PMSCR_EL1_E0SPE_E1SPE); // Enable PMSCR_EL1.{E0SPE,E1SPE}
 
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Statistical Profiling Extension: memory buffer 0x%llX\n", _ReadStatusReg(PMBPTR_EL1)));
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Statistical Profiling Extension: memory buffer limit address %llX\n", _ReadStatusReg(PMBLIMITR_EL1)));
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Statistical Profiling Extension: memory buffer real address %llX\n", (UINT64)SpeMemoryBuffer));
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Statistical Profiling Extension: memory buffer real limit address %llX\n", (UINT64)SpeMemoryBufferLimit));
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Statistical Profiling Extension: sampling profile ID register %llX\n", _ReadStatusReg(PMSIDR_EL1)));
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Statistical Profiling Extension: PMSFCR_EL1 0x%llX\n", _ReadStatusReg(PMSFCR_EL1)));
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Statistical Profiling Extension: PMSEVFR_EL1 0x%llX\n", _ReadStatusReg(PMSEVFR_EL1)));
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Statistical Profiling Extension: PMSICR_EL1 0x%llX\n", _ReadStatusReg(PMSICR_EL1)));
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Statistical Profiling Extension: PMSIRR_EL1 0x%llX\n", _ReadStatusReg(PMSIRR_EL1)));
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMBPTR_EL1=      0x%llX \n", _ReadStatusReg(PMBPTR_EL1)));
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMBLIMITR_EL1=   0x%llX \n", _ReadStatusReg(PMBLIMITR_EL1)));
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: SpeMemoryBuffer= 0x%llX \n", (UINT64)SpeMemoryBuffer));
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: SpeMemoryBufferAllocator= 0x%llX \n", (UINT64)SpeMemoryBufferAllocator));
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: SpeMemoryBufferLimit=     0x%llX \n", (UINT64)SpeMemoryBufferLimit));
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMSIDR_EL1=  0x%llX\n", _ReadStatusReg(PMSIDR_EL1)));
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMSFCR_EL1=  0x%llX\n", _ReadStatusReg(PMSFCR_EL1)));
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMSEVFR_EL1= 0x%llX\n", _ReadStatusReg(PMSEVFR_EL1)));
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMSICR_EL1=  0x%llX\n", _ReadStatusReg(PMSICR_EL1)));
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMSIRR_EL1=  0x%llX\n", _ReadStatusReg(PMSIRR_EL1)));
 
             STOP_WORK_ON_CORE();
             break;
@@ -168,7 +186,9 @@ VOID SPEWorkItemFunc(WDFWORKITEM WorkItem)
             START_WORK_ON_CORE(context->core_idx);
             UINT64 currentBufferPtr = _ReadStatusReg(PMBPTR_EL1);
 
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Statistical Profiling Extension: PMSICR_EL1 0x%llX\n", _ReadStatusReg(PMSICR_EL1)));
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMU_CTL_SPE_GET_SIZE \n"));
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMBPTR_EL1= 0x%llX \n", _ReadStatusReg(PMBPTR_EL1)));
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMSICR_EL1= 0x%llX \n", _ReadStatusReg(PMSICR_EL1)));
 
             STOP_WORK_ON_CORE();
 
@@ -180,9 +200,8 @@ VOID SPEWorkItemFunc(WDFWORKITEM WorkItem)
             START_WORK_ON_CORE(context->core_idx);
 
             _WriteStatusReg(PMBLIMITR_EL1, 0); // Disable PMBLIMITR_ELI1.E
-            _WriteStatusReg(PMSCR_EL1, _ReadStatusReg(PMSCR_EL1) & (~PMSCR_EL1_E0SPE_E1SPE)); // Disable PMSCR_EL1.{E0SPE,E1SPE}
-
-            _WriteStatusReg(PMBSR_EL1, _ReadStatusReg(PMBSR_EL1) & (~PMBSR_EL1_S)); // Clear PMBSR_EL1.S
+            // _WriteStatusReg(PMSCR_EL1, _ReadStatusReg(PMSCR_EL1) & (~PMSCR_EL1_E0SPE)); // Disable PMSCR_EL1.{E0SPE,E1SPE}
+            // _WriteStatusReg(PMBSR_EL1, _ReadStatusReg(PMBSR_EL1) & (~PMBSR_EL1_S)); // Clear PMBSR_EL1.S
             
             STOP_WORK_ON_CORE();
 
@@ -205,7 +224,8 @@ static VOID dpc_spe_overflow(struct _KDPC* dpc, PVOID ctx, PVOID sys_arg1, PVOID
     if (ctx == NULL) return;
 
     SpeInfo* spu = (SpeInfo*)ctx;
-    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE_DPC core_idx %u running at %u\n", spu->idx, KeGetCurrentProcessorNumberEx(NULL)));
+
+    KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: DPC core_idx %u running at %u\n", spu->idx, KeGetCurrentProcessorNumberEx(NULL)));
     if(spu->profiling_running == TRUE)
     {
         UINT64 currentBufferPtr = _ReadStatusReg(PMBPTR_EL1);
@@ -214,8 +234,8 @@ static VOID dpc_spe_overflow(struct _KDPC* dpc, PVOID ctx, PVOID sys_arg1, PVOID
             KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE_DPC profiling buffer full\n"));
             //Disable sampling
             _WriteStatusReg(PMBLIMITR_EL1, 0); // Disable PMBLIMITR_ELI1.E
-            _WriteStatusReg(PMBSR_EL1, _ReadStatusReg(PMBSR_EL1) & (~PMBSR_EL1_S)); // Clear PMBSR_EL1.S
-            _WriteStatusReg(PMSCR_EL1, _ReadStatusReg(PMSCR_EL1) & (~PMSCR_EL1_E0SPE_E1SPE)); // Disable PMSCR_EL1.{E0SPE,E1SPE}
+            //_WriteStatusReg(PMBSR_EL1, _ReadStatusReg(PMBSR_EL1) & (~PMBSR_EL1_S)); // Clear PMBSR_EL1.S
+            //_WriteStatusReg(PMSCR_EL1, _ReadStatusReg(PMSCR_EL1) & (~PMSCR_EL1_E0SPE_E1SPE)); // Disable PMSCR_EL1.{E0SPE,E1SPE}
             spu->profiling_running = FALSE;
         }
     }
@@ -234,7 +254,10 @@ NTSTATUS spe_setup(ULONG numCores)
     
     totalCores = numCores;
 
-    SpeMemoryBufferLimit = (unsigned char*)(((UINT64)SpeMemoryBuffer + SPE_MEMORY_BUFFER_SIZE) & PMBLIMITR_EL1_LIMIT_MASK);
+    PHYSICAL_ADDRESS paddr;
+    paddr.QuadPart = MAXULONG64;
+
+    SpeMemoryBufferAllocator = (unsigned char*)MmAllocateContiguousMemory(SPE_MEMORY_BUFFER_SIZE, paddr);
 
     for (ULONG i = 0; i < numCores; i++)
     {
@@ -275,6 +298,14 @@ void spe_destroy()
         }
         ExFreePoolWithTag(spe_info, 'SPE');
     }
+
+    if (SpeMemoryBufferAllocator)
+    {
+        MmFreeContiguousMemory(SpeMemoryBufferAllocator);
+        SpeMemoryBufferAllocator = NULL;
+        SpeMemoryBuffer = NULL;
+    }
+
 #endif
 }
 

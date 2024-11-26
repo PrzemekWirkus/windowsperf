@@ -33,8 +33,14 @@
 //
 // Arm Statistical Profiling Extensions (SPE)
 //
+#define BITS_PER_LONG_LONG                  (sizeof(UINT64) * 8)
+// Set bit at position `nr` to `1`
 #define BIT(nr)                             (1ULL << (nr))
-#define PMSCR_EL1_E0SPE_E1SPE               0b11
+// Create a contiguous bitmask starting at bit position `from` and ending at position `to`.
+#define GENMASK_ULL(to, from)                   (((~0ULL) << (from)) & (~0ULL >> (BITS_PER_LONG_LONG - 1 - (to))))
+
+#define PMSCR_EL1_E1SPE                     BIT(1)
+#define PMSCR_EL1_E0SPE                     BIT(0)
 #define PMBLIMITR_EL1_E                     1ULL
 #define PMBSR_EL1_S                         BIT(17)
 
@@ -54,6 +60,8 @@
 #define SPE_MEMORY_BUFFER_SIZE              (PAGE_SIZE*128)     // PAGE_SIZE is defined in WDM.h
 #define SPE_TIMER_PERIOD                    500
 #define SPE_BUFFER_THRESHOLD                256
+
+#define PMBIDR_EL1_Align_MASK               0b1111 // Defines the minimum alignment constraint for writes to PMBPTR_EL1, bits [3:0]
 
 typedef struct spe_info_
 {
