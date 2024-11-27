@@ -196,6 +196,7 @@ VOID SPEWorkItemFunc(WDFWORKITEM WorkItem)
             UINT64 currentBufferPtr = _ReadStatusReg(PMBPTR_EL1);
             //KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMBPTR_EL1= 0x%llX \n", _ReadStatusReg(PMBPTR_EL1)));
             //KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMSICR_EL1= 0x%llX \n", _ReadStatusReg(PMSICR_EL1)));
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMBSR_EL1= 0x%llX \n", _ReadStatusReg(PMBSR_EL1)));
             STOP_WORK_ON_CORE();
 
             spe_bytesToCopy += (currentBufferPtr - (UINT64)lastCopiedPtr);
@@ -211,10 +212,9 @@ VOID SPEWorkItemFunc(WDFWORKITEM WorkItem)
             
             STOP_WORK_ON_CORE();
 
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Statistical Profiling Extension: memory buffer 0x%llX\n", _ReadStatusReg(PMBPTR_EL1)));
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Statistical Profiling Extension: memory buffer limit address %llX\n", _ReadStatusReg(PMBLIMITR_EL1)));
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Statistical Profiling Extension: profiling buffer status/syndrome %llX\n", _ReadStatusReg(PMBSR_EL1)));
-
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMBPTR_EL1= 0x%llX \n", _ReadStatusReg(PMBPTR_EL1)));
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMBLIMITR_EL1= %llX \n", _ReadStatusReg(PMBLIMITR_EL1)));
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMBSR_EL1= 0x%llX \n", _ReadStatusReg(PMBSR_EL1)));
             break;
         }
     }
