@@ -89,9 +89,16 @@ VOID SPEWorkItemFunc(WDFWORKITEM WorkItem)
             }
             _WriteStatusReg(PMBPTR_EL1, (UINT64)SpeMemoryBuffer);
 
-            /* Set limit to SPE fill buffer
+            /*
+            * Set limit to SPE fill buffer
             */
             SpeMemoryBufferLimit = SpeMemoryBuffer + (10 * PAGE_SIZE);
+
+            /*
+            * Prepare buffer indexing used for sending SPE fill buffer data to user space.
+            */
+            lastCopiedPtr = SpeMemoryBuffer;
+            spe_bytesToCopy = 0;
 
             /*
             * Writing to PMSIRR_EL1 and PMSICR_EL1 seems to be innefective for some reason.
@@ -183,13 +190,12 @@ VOID SPEWorkItemFunc(WDFWORKITEM WorkItem)
         }
         case PMU_CTL_SPE_GET_SIZE:
         {
+            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMU_CTL_SPE_GET_SIZE \n"));
+
             START_WORK_ON_CORE(context->core_idx);
             UINT64 currentBufferPtr = _ReadStatusReg(PMBPTR_EL1);
-
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMU_CTL_SPE_GET_SIZE \n"));
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMBPTR_EL1= 0x%llX \n", _ReadStatusReg(PMBPTR_EL1)));
-            KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMSICR_EL1= 0x%llX \n", _ReadStatusReg(PMSICR_EL1)));
-
+            //KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMBPTR_EL1= 0x%llX \n", _ReadStatusReg(PMBPTR_EL1)));
+            //KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "SPE: PMSICR_EL1= 0x%llX \n", _ReadStatusReg(PMSICR_EL1)));
             STOP_WORK_ON_CORE();
 
             spe_bytesToCopy += (currentBufferPtr - (UINT64)lastCopiedPtr);
@@ -348,10 +354,7 @@ void spe_init(WDFWORKITEM* workItem)
 {
 #ifdef ENABLE_SPE
     UNREFERENCED_PARAMETER(workItem);
-
     KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "IOCTL: PMU_CTL_SPE_INIT\n"));
-
-    lastCopiedPtr = SpeMemoryBuffer;
     spe_bytesToCopy = 0;
 #else
     UNREFERENCED_PARAMETER(workItem);
